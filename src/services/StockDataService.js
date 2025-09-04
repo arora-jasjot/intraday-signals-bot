@@ -1,5 +1,6 @@
 const axios = require("axios");
 const config = require("../config");
+const symbolsKeys = require("../symbols_keys.json");
 
 const INSTRUMENT_KEY = "NSE_EQ%7CINE002A01018";
 const TIMEFRAME = "minutes";
@@ -8,6 +9,22 @@ const REQUEST_TIMEOUT = 30000;
 const USER_AGENT = "intraday-bot/1.0.0";
 
 class StockDataService {
+  getSymbolFromInvKey(invKey) {
+    // Decode URL encoded inv_key
+    const decodedInvKey = decodeURIComponent(invKey);
+    
+    // Find symbol in symbols_keys.json
+    for (const symbolObj of symbolsKeys) {
+      const symbol = Object.keys(symbolObj)[0];
+      const key = symbolObj[symbol];
+      if (key === decodedInvKey) {
+        return symbol;
+      }
+    }
+    
+    return "UNKNOWN";
+  }
+
   async fetchApiData(url) {
     try {
       const response = await axios.get(url, {
@@ -327,15 +344,6 @@ class StockDataService {
           candle1: signal.candle1,
           candle2: signal.candle2
         };
-
-        // Add body analysis based on signal type
-        if (signal.signalType === 'LONG') {
-          signalData.bodyBelowPivot = signal.bodyBelowPivot;
-          signalData.bodyAbovePivot = signal.bodyAbovePivot;
-        } else if (signal.signalType === 'SHORT') {
-          signalData.bodyAbovePivot = signal.bodyAbovePivot;
-          signalData.bodyBelowPivot = signal.bodyBelowPivot;
-        }
         
         signals.push(signalData);
       }
@@ -347,14 +355,12 @@ class StockDataService {
 
     return {
       invKey,
+      symbol: this.getSymbolFromInvKey(invKey),
       backtestDate: currentDate,
-      pivotPoints,
-      totalCandlesAnalyzed: backtestCandles.length,
       signalsDetected: signals.length,
       longSignalsDetected: longSignals.length,
       shortSignalsDetected: shortSignals.length,
-      signals,
-      candles: backtestCandles
+      signals
     };
   }
 }

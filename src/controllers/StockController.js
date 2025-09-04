@@ -43,12 +43,8 @@ class StockController {
       
       if (!dateMatch) {
         return res.status(400).json({
-          success: false,
-          error: {
-            message: "Invalid date format. Please use DD-MM-YYYY format",
-            example: "25-12-2023"
-          },
-          timestamp: new Date().toISOString(),
+          status: "failure",
+          message: "Invalid date format. Please use DD-MM-YYYY format (example: 25-12-2023)"
         });
       }
       
@@ -61,12 +57,8 @@ class StockController {
       // Validate if the date is valid
       if (testingDate.getUTCDate() != day || testingDate.getUTCMonth() != month - 1 || testingDate.getUTCFullYear() != year) {
         return res.status(400).json({
-          success: false,
-          error: {
-            message: "Invalid date provided",
-            details: "Please check the date values"
-          },
-          timestamp: new Date().toISOString(),
+          status: "failure",
+          message: "Invalid date provided. Please check the date values"
         });
       }
       
@@ -95,21 +87,15 @@ class StockController {
       );
 
       res.status(200).json({
-        success: true,
-        data: result,
-        backtest_date: testingDateStr,
-        timestamp: new Date().toISOString(),
+        status: "success",
+        data: result
       });
 
     } catch (error) {
       console.error("Failed to run backtest:", error);
       res.status(500).json({
-        success: false,
-        error: {
-          message: "Failed to run backtest",
-          details: error.message,
-        },
-        timestamp: new Date().toISOString(),
+        status: "failure",
+        message: "Failed to run backtest: " + error.message
       });
     }
   }
