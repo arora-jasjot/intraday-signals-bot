@@ -445,6 +445,169 @@ class StockDataService {
       errors: errors.length > 0 ? errors : undefined
     };
   }
+
+  async searchCurrentStocks(previousDate, currentDate) {
+    console.log(`Starting current stock search on ${currentDate} using pivot from ${previousDate}`);
+    
+    const results = [];
+    const errors = [];
+    
+    // Extract all inv_keys from symbols_keys.json
+    const allInvKeys = symbolsKeys.map(symbolObj => {
+      const symbol = Object.keys(symbolObj)[0];
+      return symbolObj[symbol];
+    });
+
+    console.log(`Processing ${allInvKeys.length} symbols for current search (last 2 candles only)`);
+
+    // Process all symbols with limited concurrency to avoid overwhelming the API
+    const batchSize = 5; // Process 5 symbols at a time
+    for (let i = 0; i < allInvKeys.length; i += batchSize) {
+      const batch = allInvKeys.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async (invKey) => {
+        try {
+          const result = await this.runCurrentSearch(invKey, previousDate, currentDate);
+          return { success: true, data: result };
+        } catch (error) {
+          console.error(`Failed to process ${this.getSymbolFromInvKey(invKey)} (${invKey}):`, error.message);
+          return {
+            success: false,
+            invKey,
+            symbol: this.getSymbolFromInvKey(invKey),
+            error: error.message
+          };
+        }
+      });
+
+      const batchResults = await Promise.all(batchPromises);
+      
+      // Separate successful results from errors, only include results with signals
+      batchResults.forEach(result => {
+        if (result.success) {
+          // Only include results that have signals detected
+          if (result.data.signalsDetected > 0) {
+            results.push(result.data);
+          }
+        } else {
+          errors.push({
+            invKey: result.invKey,
+            symbol: result.symbol,
+            error: result.error
+          });
+        }
+      });
+
+      // Small delay between batches to be respectful to the API
+      if (i + batchSize < allInvKeys.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    console.log(`Current stock search completed. Symbols with signals: ${results.length}, Failed: ${errors.length}`);
+
+    // Return results with summary
+    return {
+      totalSymbols: allInvKeys.length,
+      symbolsWithSignals: results.length,
+      failedSearches: errors.length,
+      searchDate: currentDate,
+      results,
+      errors: errors.length > 0 ? errors : undefined
+    };
+  }
+
+  async runCurrentSearch(invKey, previousDate, currentDate) {
+    if (!config.api.externalApiUrl) {
+      throw new Error("External API URL not configured");
+    }
+
+    console.log(`Starting current search for ${this.getSymbolFromInvKey(invKey)} on ${currentDate}`);
+
+    // Fetch previous day data for pivot calculation
+    const pivotData = await this.getPivotData(previousDate, invKey);
+    if (!pivotData) {
+      throw new Error("Failed to fetch pivot data for previous day");
+    }
+
+    // Calculate pivot points from previous day
+    const pivotPoints = this.calculatePivotPoints(pivotData.data.candles);
+
+    // Fetch current day 5-minute candle data
+    const candlesData = await this.getCurrentDayData(currentDate, invKey);
+    if (!candlesData) {
+      throw new Error("Failed to fetch current day candle data");
+    }
+
+    // Format and reverse candles to get chronological order
+    const allCandles = [...candlesData.data.candles].reverse().map(candle => ({
+      open: candle[1],
+      high: candle[2],
+      low: candle[3],
+      close: candle[4],
+      timestamp: this.convertToISTTime(candle[0])
+    }));
+
+    // Filter candles for backtest time range (9:20 AM to 11:20 AM) to ensure we're in trading hours
+    const tradingCandles = allCandles.filter(candle => 
+      this.isWithinBacktestTimeRange(candle.timestamp)
+    );
+
+    // Get only the last 2 candles for current search
+    if (tradingCandles.length < 2) {
+      return {
+        invKey,
+        symbol: this.getSymbolFromInvKey(invKey),
+        searchDate: currentDate,
+        signalsDetected: 0,
+        longSignalsDetected: 0,
+        shortSignalsDetected: 0,
+        signals: [],
+        message: "Insufficient candles for analysis (need at least 2)"
+      };
+    }
+
+    const lastTwoCandles = tradingCandles.slice(-2);
+    const candle1 = lastTwoCandles[0]; // candle[-2]
+    const candle2 = lastTwoCandles[1]; // candle[-1]
+
+    console.log(`Analyzing last 2 candles for ${this.getSymbolFromInvKey(invKey)}: ${candle1.timestamp} and ${candle2.timestamp}`);
+
+    const signals = [];
+
+    // Check the last two candles for trading signals
+    const signal = this.checkTradingSignals(candle1, candle2, pivotPoints);
+    
+    if (signal.detected) {
+      const nextCandleTime = this.getNextCandleTime(candle2.timestamp);
+      console.log(`${signal.signalType} Detected for ${this.getSymbolFromInvKey(invKey)} at ${nextCandleTime}`);
+      
+      const signalData = {
+        signalType: signal.signalType,
+        detectionTime: nextCandleTime,
+        pivotType: signal.pivotType,
+        pivotValue: signal.pivot,
+        candle1: signal.candle1,
+        candle2: signal.candle2
+      };
+      
+      signals.push(signalData);
+    }
+
+    // Count signals by type
+    const longSignals = signals.filter(signal => signal.signalType === 'LONG');
+    const shortSignals = signals.filter(signal => signal.signalType === 'SHORT');
+
+    return {
+      invKey,
+      symbol: this.getSymbolFromInvKey(invKey),
+      searchDate: currentDate,
+      signalsDetected: signals.length,
+      longSignalsDetected: longSignals.length,
+      shortSignalsDetected: shortSignals.length,
+      signals
+    };
+  }
 }
 
 module.exports = StockDataService;

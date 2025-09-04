@@ -167,6 +167,47 @@ class StockController {
       });
     }
   }
+
+  async searchStocks(req, res) {
+    try {
+      // Get today's date
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      
+      // Calculate previous trading day for pivot calculation
+      const previousDay = new Date(today);
+      const dayOfWeek = today.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      
+      let daysToSubtract = 1;
+      if (dayOfWeek === 1) { // Monday
+        daysToSubtract = 3; // Go back to Friday
+      } else if (dayOfWeek === 0) { // Sunday
+        daysToSubtract = 2; // Go back to Friday
+      }
+      
+      previousDay.setUTCDate(today.getUTCDate() - daysToSubtract);
+      const previousDayStr = previousDay.toISOString().split('T')[0];
+
+      console.log(`Searching current stocks on: ${todayStr} using pivot from: ${previousDayStr}`);
+
+      const results = await this.stockDataService.searchCurrentStocks(
+        previousDayStr,
+        todayStr
+      );
+
+      res.status(200).json({
+        status: "success",
+        data: results
+      });
+
+    } catch (error) {
+      console.error("Failed to search current stocks:", error);
+      res.status(500).json({
+        status: "failure",
+        message: "Failed to search current stocks: " + error.message
+      });
+    }
+  }
 }
 
 module.exports = StockController;
