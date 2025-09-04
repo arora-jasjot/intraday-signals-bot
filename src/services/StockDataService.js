@@ -131,7 +131,7 @@ class StockDataService {
   }
 
   parseTimeFromTimestamp(timestamp) {
-    // Convert "10:20 AM" format to minutes from 9:15 AM
+    // Convert "10:20 AM" format to minutes from 9:20 AM (analysis start time)
     const [time, ampm] = timestamp.split(' ');
     const [hours, minutes] = time.split(':').map(Number);
     let totalHours = hours;
@@ -143,14 +143,14 @@ class StockDataService {
     }
     
     const totalMinutes = totalHours * 60 + minutes;
-    const marketStartMinutes = 9 * 60 + 15; // 9:15 AM
+    const analysisStartMinutes = 9 * 60 + 20; // 9:20 AM (analysis start)
     
-    return totalMinutes - marketStartMinutes;
+    return totalMinutes - analysisStartMinutes;
   }
 
   isWithinBacktestTimeRange(timestamp) {
     const minutesFromStart = this.parseTimeFromTimestamp(timestamp);
-    const endTime = 11 * 60 + 20 - (9 * 60 + 15); // 11:20 AM - 9:15 AM = 125 minutes
+    const endTime = 11 * 60 + 20 - (9 * 60 + 20); // 11:20 AM - 9:20 AM = 120 minutes
     
     return minutesFromStart >= 0 && minutesFromStart <= endTime;
   }
@@ -171,6 +171,7 @@ class StockDataService {
           if (candle2.low > pivot && candle2.close > candle2.open) {
             return {
               detected: true,
+              signalType: 'LONG',
               pivot: pivot,
               pivotType: this.getPivotType(pivot, pivotPoints),
               candle1: candle1,
@@ -181,6 +182,54 @@ class StockDataService {
           }
         }
       }
+    }
+    
+    return { detected: false };
+  }
+
+  checkShortSignal(candle1, candle2, pivotPoints) {
+    const allPivots = [pivotPoints.PP, pivotPoints.S1, pivotPoints.S2, pivotPoints.S3, pivotPoints.R1, pivotPoints.R2, pivotPoints.R3];
+    
+    for (const pivot of allPivots) {
+      // Check if candle1 opens above pivot and closes below pivot
+      if (candle1.open > pivot && candle1.close < pivot) {
+        // Calculate body portions
+        const bodyAbovePivot = candle1.open - pivot;
+        const bodyBelowPivot = pivot - candle1.close;
+        
+        // Check if body above pivot > body below pivot
+        if (bodyAbovePivot > bodyBelowPivot) {
+          // Check candle2 conditions: high below pivot and close < open (bearish)
+          if (candle2.high < pivot && candle2.close < candle2.open) {
+            return {
+              detected: true,
+              signalType: 'SHORT',
+              pivot: pivot,
+              pivotType: this.getPivotType(pivot, pivotPoints),
+              candle1: candle1,
+              candle2: candle2,
+              bodyAbovePivot: Number(bodyAbovePivot.toFixed(4)),
+              bodyBelowPivot: Number(bodyBelowPivot.toFixed(4))
+            };
+          }
+        }
+      }
+    }
+    
+    return { detected: false };
+  }
+
+  checkTradingSignals(candle1, candle2, pivotPoints) {
+    // Check for LONG signal
+    const longSignal = this.checkLongSignal(candle1, candle2, pivotPoints);
+    if (longSignal.detected) {
+      return longSignal;
+    }
+    
+    // Check for SHORT signal
+    const shortSignal = this.checkShortSignal(candle1, candle2, pivotPoints);
+    if (shortSignal.detected) {
+      return shortSignal;
     }
     
     return { detected: false };
@@ -250,12 +299,12 @@ class StockDataService {
       timestamp: this.convertToISTTime(candle[0])
     }));
 
-    // Filter candles for backtest time range (9:15 AM to 11:20 AM)
+    // Filter candles for backtest time range (9:20 AM to 11:20 AM)
     const backtestCandles = allCandles.filter(candle => 
       this.isWithinBacktestTimeRange(candle.timestamp)
     );
 
-    console.log(`Analyzing ${backtestCandles.length} candles from 9:15 AM to 11:20 AM`);
+    console.log(`Analyzing ${backtestCandles.length} candles from 9:20 AM to 11:20 AM`);
 
     const signals = [];
 
@@ -264,23 +313,37 @@ class StockDataService {
       const candle1 = backtestCandles[i];
       const candle2 = backtestCandles[i + 1];
       
-      const signal = this.checkLongSignal(candle1, candle2, pivotPoints);
+      const signal = this.checkTradingSignals(candle1, candle2, pivotPoints);
       
       if (signal.detected) {
         const nextCandleTime = this.getNextCandleTime(candle2.timestamp);
-        console.log(`LONG Detected at ${nextCandleTime}`);
+        console.log(`${signal.signalType} Detected at ${nextCandleTime}`);
         
-        signals.push({
+        const signalData = {
+          signalType: signal.signalType,
           detectionTime: nextCandleTime,
           pivotType: signal.pivotType,
           pivotValue: signal.pivot,
           candle1: signal.candle1,
-          candle2: signal.candle2,
-          bodyBelowPivot: signal.bodyBelowPivot,
-          bodyAbovePivot: signal.bodyAbovePivot
-        });
+          candle2: signal.candle2
+        };
+
+        // Add body analysis based on signal type
+        if (signal.signalType === 'LONG') {
+          signalData.bodyBelowPivot = signal.bodyBelowPivot;
+          signalData.bodyAbovePivot = signal.bodyAbovePivot;
+        } else if (signal.signalType === 'SHORT') {
+          signalData.bodyAbovePivot = signal.bodyAbovePivot;
+          signalData.bodyBelowPivot = signal.bodyBelowPivot;
+        }
+        
+        signals.push(signalData);
       }
     }
+
+    // Count signals by type
+    const longSignals = signals.filter(signal => signal.signalType === 'LONG');
+    const shortSignals = signals.filter(signal => signal.signalType === 'SHORT');
 
     return {
       invKey,
@@ -288,6 +351,8 @@ class StockDataService {
       pivotPoints,
       totalCandlesAnalyzed: backtestCandles.length,
       signalsDetected: signals.length,
+      longSignalsDetected: longSignals.length,
+      shortSignalsDetected: shortSignals.length,
       signals,
       candles: backtestCandles
     };

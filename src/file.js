@@ -1,13 +1,51 @@
 const fs = require("fs");
 
-// Read your original JSON file
-const rawData = fs.readFileSync("NSE.json");
+const stockSymbols = [
+  "HDFCBANK",
+  "ICICIBANK",
+  "AXISBANK",
+  "SBIN",
+  "INFY",
+  "TECHM",
+  "HCLTECH",
+  "ITC",
+  "DABUR",
+  "SUNPHARMA",
+  "DRREDDY",
+  "CIPLA",
+  "TATAMOTORS",
+  "RELIANCE",
+  "ONGC",
+  "NTPC",
+  "POWERGRID",
+  "TATASTEEL",
+  "JSWSTEEL",
+  "HINDALCO",
+  "DLF",
+  "MOTILALOFS",
+  "OIL",
+  "VOLTAS",
+  "KPITTECH",
+  "HAVELLS",
+  "TATAPOWER",
+  "BHARATFORG",
+  "UNITDSPR",
+  "UBL",
+];
+
+// Read original file
+const rawData = fs.readFileSync("NSE_EQ.json");
 const data = JSON.parse(rawData);
 
-// Filter objects where segment === "NSE_EQ"
-const filtered = data.filter(obj => obj.segment === "NSE_EQ");
+// Step 1: Filter only NSE_EQ
+const filtered = data.filter((obj) => obj.segment === "NSE_EQ" && stockSymbols.includes(obj.trading_symbol));
 
-// Write the filtered data into a new JSON file
-fs.writeFileSync("NSE_EQ.json", JSON.stringify(filtered, null, 2));
+// Step 2: Map new object structure
+const mapped = filtered.map((obj) => ({
+  [obj.trading_symbol]: obj.instrument_key,
+}));
 
-console.log(`Filtered ${filtered.length} records saved to NSE_EQ.json`);
+// Write to new file
+fs.writeFileSync("symbols_keys.json", JSON.stringify(mapped, null, 2));
+
+console.log(`Mapped ${mapped.length} records saved to symbols_keys.json`);
