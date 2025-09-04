@@ -32,10 +32,6 @@ class StockDataService {
     return (prevHigh + prevLow + prevClose) / 3;
   }
 
-  buildApiUrl(baseUrl, instrumentKey, timeframe, interval, date) {
-    return `${baseUrl}/${instrumentKey}/${timeframe}/${interval}/${date}/${date}`;
-  }
-
   convertToISTTime(utcDateStr) {
     const date = new Date(utcDateStr);
 
@@ -50,26 +46,15 @@ class StockDataService {
   }
 
   async getPivotData(previousDate, instrumentKey) {
-    const pivotUrl = this.buildApiUrl(
-      config.api.externalApiUrl,
-      instrumentKey,
-      "days",
-      1,
-      previousDate
-    );
+    const pivotUrl = `${config.api.externalApiUrl}/${instrumentKey}/days/1/${previousDate}/${previousDate}`
 
     console.log("Fetching pivot data from:", pivotUrl);
     return await this.fetchApiData(pivotUrl);
   }
 
   async getCurrentDayData(currentDate, instrumentKey) {
-    const candlesUrl = this.buildApiUrl(
-      config.api.externalApiUrl,
-      instrumentKey,
-      TIMEFRAME,
-      INTERVAL,
-      currentDate
-    );
+
+    const candlesUrl = `${config.api.externalApiUrl}/intraday/${instrumentKey}/${TIMEFRAME}/${INTERVAL}`
 
     console.log("Fetching stock data from:", candlesUrl);
     return await this.fetchApiData(candlesUrl);
