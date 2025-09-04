@@ -70,10 +70,21 @@ class StockDataService {
   }
 
   async getCurrentDayData(currentDate, instrumentKey) {
+    // Check if current date is today
+    const today = new Date().toISOString().split('T')[0];
+    const isToday = currentDate === today;
+    
+    let candlesUrl;
+    
+    if (isToday) {
+      // Use intraday URL for today's data
+      candlesUrl = `${config.api.externalApiUrl}/intraday/${instrumentKey}/${TIMEFRAME}/${INTERVAL}`;
+    } else {
+      // Use historical URL for past dates
+      candlesUrl = `${config.api.externalApiUrl}/${instrumentKey}/${TIMEFRAME}/${INTERVAL}/${currentDate}/${currentDate}`;
+    }
 
-    const candlesUrl = `${config.api.externalApiUrl}/intraday/${instrumentKey}/${TIMEFRAME}/${INTERVAL}`
-
-    console.log("Fetching stock data from:", candlesUrl);
+    console.log("Fetching stock data from:", candlesUrl, isToday ? "(Today's data)" : "(Historical data)");
     return await this.fetchApiData(candlesUrl);
   }
 
@@ -92,7 +103,7 @@ class StockDataService {
       throw new Error("External API URL not configured");
     }
 
-    const pivotData = await this.getPivotData(previousDate);
+    const pivotData = await this.getPivotData(previousDate, INSTRUMENT_KEY);
     if (!pivotData) {
       throw new Error("Failed to fetch pivot data");
     }
@@ -108,7 +119,7 @@ class StockDataService {
       };
     }
 
-    const candlesData = await this.getCurrentDayData(currentDate);
+    const candlesData = await this.getCurrentDayData(currentDate, INSTRUMENT_KEY);
     if (!candlesData) {
       throw new Error("Failed to fetch current day data");
     }
@@ -361,6 +372,77 @@ class StockDataService {
       longSignalsDetected: longSignals.length,
       shortSignalsDetected: shortSignals.length,
       signals
+    };
+  }
+
+  async runBacktestAll(previousDate, currentDate) {
+    console.log(`Starting backtest for ALL symbols on ${currentDate} using previous day ${previousDate}`);
+    
+    const results = [];
+    const errors = [];
+    
+    // Extract all inv_keys from symbols_keys.json
+    const allInvKeys = symbolsKeys.map(symbolObj => {
+      const symbol = Object.keys(symbolObj)[0];
+      return symbolObj[symbol];
+    });
+
+    console.log(`Processing ${allInvKeys.length} symbols for backtest`);
+
+    // Process all symbols with limited concurrency to avoid overwhelming the API
+    const batchSize = 5; // Process 5 symbols at a time
+    for (let i = 0; i < allInvKeys.length; i += batchSize) {
+      const batch = allInvKeys.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async (invKey) => {
+        try {
+          const result = await this.runBacktest(invKey, previousDate, currentDate);
+          return { success: true, data: result };
+        } catch (error) {
+          console.error(`Failed to process ${this.getSymbolFromInvKey(invKey)} (${invKey}):`, error.message);
+          return {
+            success: false,
+            invKey,
+            symbol: this.getSymbolFromInvKey(invKey),
+            error: error.message
+          };
+        }
+      });
+
+      const batchResults = await Promise.all(batchPromises);
+      
+      // Separate successful results from errors, only include results with signals
+      batchResults.forEach(result => {
+        if (result.success) {
+          // Only include results that have signals detected
+          if (result.data.signalsDetected > 0) {
+            results.push(result.data);
+          }
+        } else {
+          errors.push({
+            invKey: result.invKey,
+            symbol: result.symbol,
+            error: result.error
+          });
+        }
+      });
+
+      // Small delay between batches to be respectful to the API
+      if (i + batchSize < allInvKeys.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    console.log(`Backtest completed. Symbols with signals: ${results.length}, Failed: ${errors.length}`);
+
+    // Return results with summary
+    return {
+      totalSymbols: allInvKeys.length,
+      symbolsWithSignals: results.length,
+      failedBacktests: errors.length,
+      backtestDate: currentDate,
+      results,
+      errors: errors.length > 0 ? errors : undefined
     };
   }
 }

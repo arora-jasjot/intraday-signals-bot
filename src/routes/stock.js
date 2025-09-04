@@ -6,5 +6,6 @@ const stockController = new StockController();
 
 router.get("/fetch-stock-data", stockController.fetchStockData.bind(stockController));
 router.get("/backtest/:inv_key/:date", stockController.backtest.bind(stockController));
+router.get("/backtest-all/:date", stockController.backtestAll.bind(stockController));
 
 module.exports = router;
