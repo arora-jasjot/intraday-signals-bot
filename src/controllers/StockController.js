@@ -208,6 +208,96 @@ class StockController {
       });
     }
   }
+
+  async testStrategy(req, res) {
+    try {
+      const { start_date, end_date, instruments } = req.body;
+
+      // Validate required fields
+      if (!start_date || !end_date || !instruments) {
+        return res.status(400).json({
+          status: "failure",
+          message: "Missing required fields: start_date, end_date, instruments"
+        });
+      }
+
+      // Validate instruments array
+      if (!Array.isArray(instruments) || instruments.length === 0) {
+        return res.status(400).json({
+          status: "failure",
+          message: "instruments must be a non-empty array of inv_keys"
+        });
+      }
+
+      // Parse and validate the date parameters (DD-MM-YYYY format)
+      const dateRegex = /^(\d{2})-(\d{2})-(\d{4})$/;
+      
+      const startDateMatch = start_date.match(dateRegex);
+      if (!startDateMatch) {
+        return res.status(400).json({
+          status: "failure",
+          message: "Invalid start_date format. Please use DD-MM-YYYY format (example: 25-12-2023)"
+        });
+      }
+
+      const endDateMatch = end_date.match(dateRegex);
+      if (!endDateMatch) {
+        return res.status(400).json({
+          status: "failure",
+          message: "Invalid end_date format. Please use DD-MM-YYYY format (example: 25-12-2023)"
+        });
+      }
+
+      // Extract day, month, year from start_date (DD-MM-YYYY format)
+      const [, day, month, year] = startDateMatch;
+      
+      // Create date string in YYYY-MM-DD format for API usage (treating input as IST)
+      const testingDateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      const testingDate = new Date(testingDateStr + 'T00:00:00.000Z');
+      
+      // Validate if the date is valid
+      if (testingDate.getUTCDate() != day || testingDate.getUTCMonth() != month - 1 || testingDate.getUTCFullYear() != year) {
+        return res.status(400).json({
+          status: "failure",
+          message: "Invalid date provided. Please check the date values"
+        });
+      }
+
+      // Calculate previous trading day for pivot calculation
+      const previousDay = new Date(testingDate);
+      const dayOfWeek = testingDate.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      
+      let daysToSubtract = 1;
+      if (dayOfWeek === 1) { // Monday
+        daysToSubtract = 3; // Go back to Friday
+      } else if (dayOfWeek === 0) { // Sunday
+        daysToSubtract = 2; // Go back to Friday
+      }
+      
+      previousDay.setUTCDate(testingDate.getUTCDate() - daysToSubtract);
+      const previousDayStr = previousDay.toISOString().split('T')[0];
+
+      console.log(`Testing strategy for ${instruments.length} instruments on: ${testingDateStr} using pivot from: ${previousDayStr}`);
+
+      const results = await this.stockDataService.testStrategyForInstruments(
+        instruments,
+        previousDayStr,
+        testingDateStr
+      );
+
+      res.status(200).json({
+        status: "success",
+        data: results
+      });
+
+    } catch (error) {
+      console.error("Failed to test strategy:", error);
+      res.status(500).json({
+        status: "failure",
+        message: "Failed to test strategy: " + error.message
+      });
+    }
+  }
 }
 
 module.exports = StockController;

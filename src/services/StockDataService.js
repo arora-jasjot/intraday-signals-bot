@@ -183,8 +183,60 @@ class StockDataService {
     return minutesFromStart >= 0 && minutesFromStart <= endTime;
   }
 
+  cutsTooManyPivots(candle1, candle2, allPivots) {
+    // Count how many pivot points each candle cuts through
+    const candle1Cuts = this.countPivotsCut(candle1, allPivots);
+    const candle2Cuts = this.countPivotsCut(candle2, allPivots);
+    
+    // Check if either candle cuts more than 1 pivot point
+    if (candle1Cuts > 1 || candle2Cuts > 1) {
+      return true;
+    }
+    
+    // Check if candle1 and candle2 combined cut more than 1 pivot point
+    // This means finding the overall range covered by both candles
+    const combinedHigh = Math.max(candle1.high, candle2.high);
+    const combinedLow = Math.min(candle1.low, candle2.low);
+    
+    const combinedCuts = this.countPivotsBetween(combinedLow, combinedHigh, allPivots);
+    
+    return combinedCuts > 1;
+  }
+
+  countPivotsCut(candle, allPivots) {
+    let count = 0;
+    const candleHigh = Math.max(candle.open, candle.close, candle.high);
+    const candleLow = Math.min(candle.open, candle.close, candle.low);
+    
+    for (const pivot of allPivots) {
+      // A candle cuts a pivot if the pivot is between the candle's low and high
+      if (pivot >= candleLow && pivot <= candleHigh) {
+        count++;
+      }
+    }
+    
+    return count;
+  }
+
+  countPivotsBetween(low, high, allPivots) {
+    let count = 0;
+    
+    for (const pivot of allPivots) {
+      if (pivot >= low && pivot <= high) {
+        count++;
+      }
+    }
+    
+    return count;
+  }
+
   checkLongSignal(candle1, candle2, pivotPoints) {
     const allPivots = [pivotPoints.PP, pivotPoints.S1, pivotPoints.S2, pivotPoints.S3, pivotPoints.R1, pivotPoints.R2, pivotPoints.R3];
+    
+    // Check if candle1 or candle2 or both combined cut more than 1 pivot point
+    if (this.cutsTooManyPivots(candle1, candle2, allPivots)) {
+      return { detected: false };
+    }
     
     for (const pivot of allPivots) {
       // Check if candle1 opens below pivot and closes above pivot
@@ -217,6 +269,11 @@ class StockDataService {
 
   checkShortSignal(candle1, candle2, pivotPoints) {
     const allPivots = [pivotPoints.PP, pivotPoints.S1, pivotPoints.S2, pivotPoints.S3, pivotPoints.R1, pivotPoints.R2, pivotPoints.R3];
+    
+    // Check if candle1 or candle2 or both combined cut more than 1 pivot point
+    if (this.cutsTooManyPivots(candle1, candle2, allPivots)) {
+      return { detected: false };
+    }
     
     for (const pivot of allPivots) {
       // Check if candle1 opens above pivot and closes below pivot
@@ -274,6 +331,66 @@ class StockDataService {
     return 'Unknown';
   }
 
+  calculateStopLossAndTarget(signal, priceAtDetection) {
+    if (!priceAtDetection) {
+      return { stopLoss: null, target: null };
+    }
+
+    let stopLoss, target;
+
+    if (signal.signalType === 'LONG') {
+      // For LONG trades:
+      // 1. LOW of Candle 1 that cuts PP
+      const candle1Low = signal.candle1.low;
+      
+      // 2. PivotValue - 0.10%
+      const pivotMinus01Percent = signal.pivot * (1 - 0.001); // 0.10% = 0.001
+      
+      // Choose whichever is lower (more restrictive for long trades)
+      const calculatedStopLoss = Math.min(candle1Low, pivotMinus01Percent);
+      
+      // Maximum stop loss = 0.50% below detection price
+      const maxStopLoss = priceAtDetection * (1 - 0.005); // 0.50% = 0.005
+      
+      // Use the higher value (less restrictive) between calculated and max stop loss
+      stopLoss = Math.max(calculatedStopLoss, maxStopLoss);
+      
+      // Calculate target: 1:2 risk-reward ratio
+      // Risk = detection price - stop loss
+      // Target = detection price + (2 * risk)
+      const risk = priceAtDetection - stopLoss;
+      target = priceAtDetection + (2 * risk);
+      
+    } else if (signal.signalType === 'SHORT') {
+      // For SHORT trades:
+      // 1. HIGH of Candle 1 that cuts PP
+      const candle1High = signal.candle1.high;
+      
+      // 2. PivotValue + 0.10%
+      const pivotPlus01Percent = signal.pivot * (1 + 0.001); // 0.10% = 0.001
+      
+      // Choose whichever is higher (more restrictive for short trades)
+      const calculatedStopLoss = Math.max(candle1High, pivotPlus01Percent);
+      
+      // Maximum stop loss = 0.50% above detection price
+      const maxStopLoss = priceAtDetection * (1 + 0.005); // 0.50% = 0.005
+      
+      // Use the lower value (less restrictive) between calculated and max stop loss
+      stopLoss = Math.min(calculatedStopLoss, maxStopLoss);
+      
+      // Calculate target: 1:2 risk-reward ratio
+      // Risk = stop loss - detection price
+      // Target = detection price - (2 * risk)
+      const risk = stopLoss - priceAtDetection;
+      target = priceAtDetection - (2 * risk);
+    }
+
+    return {
+      stopLoss: Number(stopLoss.toFixed(4)),
+      target: Number(target.toFixed(4))
+    };
+  }
+
   getNextCandleTime(currentTimestamp) {
     const [time, ampm] = currentTimestamp.split(' ');
     const [hours, minutes] = time.split(':').map(Number);
@@ -293,6 +410,100 @@ class StockDataService {
     const displayAmPm = newHours >= 12 ? 'PM' : 'AM';
     
     return `${displayHours}:${newMinutes.toString().padStart(2, '0')} ${displayAmPm}`;
+  }
+
+  isBeforeThreePM(timestamp) {
+    const [time, ampm] = timestamp.split(' ');
+    const [hours, minutes] = time.split(':').map(Number);
+    
+    let totalHours = hours;
+    if (ampm === 'PM' && hours !== 12) {
+      totalHours += 12;
+    } else if (ampm === 'AM' && hours === 12) {
+      totalHours = 0;
+    }
+    
+    const totalMinutes = totalHours * 60 + minutes;
+    const threePMMinutes = 15 * 60; // 3:00 PM = 15:00 = 15 * 60 minutes
+    
+    return totalMinutes <= threePMMinutes;
+  }
+
+  checkTradeOutcome(signalType, entryPrice, stopLoss, target, candles, startIndex) {
+    if (!entryPrice || !stopLoss || !target) {
+      console.log(`Invalid prices - Entry: ${entryPrice}, Stop Loss: ${stopLoss}, Target: ${target}`);
+      return 0; // No valid prices
+    }
+
+    console.log(`\n=== CHECKING TRADE OUTCOME ===`);
+    console.log(`Signal Type: ${signalType}`);
+    console.log(`Entry Price: ${entryPrice}`);
+    console.log(`Stop Loss: ${stopLoss}`);
+    console.log(`Target: ${target}`);
+    console.log(`Start Index: ${startIndex}`);
+    console.log(`Total candles available: ${candles.length}`);
+    console.log(`Checking from candle index ${startIndex} onwards until 3:00 PM`);
+    console.log(`================================\n`);
+
+    let candleCount = 0;
+    
+    // Check all candles from startIndex onwards until 3:00 PM
+    for (let i = startIndex; i < candles.length; i++) {
+      const candle = candles[i];
+      candleCount++;
+      
+      console.log(`[${candleCount}] Candle ${i}: ${candle.timestamp}`);
+      console.log(`    Open: ${candle.open}, High: ${candle.high}, Low: ${candle.low}, Close: ${candle.close}`);
+      
+      // Stop checking after 3:00 PM
+      if (!this.isBeforeThreePM(candle.timestamp)) {
+        console.log(`    ⏰ STOPPING - ${candle.timestamp} is after 3:00 PM`);
+        break;
+      }
+
+      if (signalType === 'LONG') {
+        console.log(`    📈 LONG trade check:`);
+        console.log(`       Stop Loss check: ${candle.low} <= ${stopLoss} ? ${candle.low <= stopLoss}`);
+        console.log(`       Target check: ${candle.high} >= ${target} ? ${candle.high >= target}`);
+        
+        // For LONG trades: check if price goes below stop loss or high reaches/exceeds target
+        if (candle.low <= stopLoss) {
+          console.log(`    ❌ LONG STOP LOSS HIT at ${candle.timestamp}`);
+          console.log(`       Candle Low (${candle.low}) <= Stop Loss (${stopLoss})`);
+          return -1; // Stop loss hit
+        }
+        if (candle.high >= target) {
+          console.log(`    ✅ LONG TARGET HIT at ${candle.timestamp}`);
+          console.log(`       Candle High (${candle.high}) >= Target (${target})`);
+          return 2; // Target hit
+        }
+        console.log(`    ⏳ Continue checking...`);
+        
+      } else if (signalType === 'SHORT') {
+        console.log(`    📉 SHORT trade check:`);
+        console.log(`       Stop Loss check: ${candle.high} >= ${stopLoss} ? ${candle.high >= stopLoss}`);
+        console.log(`       Target check: ${candle.low} <= ${target} ? ${candle.low <= target}`);
+        
+        // For SHORT trades: check if price goes above stop loss or low reaches/goes below target
+        if (candle.high >= stopLoss) {
+          console.log(`    ❌ SHORT STOP LOSS HIT at ${candle.timestamp}`);
+          console.log(`       Candle High (${candle.high}) >= Stop Loss (${stopLoss})`);
+          return -1; // Stop loss hit
+        }
+        if (candle.low <= target) {
+          console.log(`    ✅ SHORT TARGET HIT at ${candle.timestamp}`);
+          console.log(`       Candle Low (${candle.low}) <= Target (${target})`);
+          return 2; // Target hit
+        }
+        console.log(`    ⏳ Continue checking...`);
+      }
+      console.log(``);
+    }
+
+    console.log(`⏰ END OF ANALYSIS: Checked ${candleCount} candles until 3:00 PM`);
+    console.log(`❌ No target or stop loss hit by 3:00 PM - returning 0`);
+    console.log(`=======================================\n`);
+    return 0; // Neither target nor stop loss hit by 3:00 PM
   }
 
   async runBacktest(invKey, previousDate, currentDate) {
@@ -327,36 +538,71 @@ class StockDataService {
       timestamp: this.convertToISTTime(candle[0])
     }));
 
-    // Filter candles for backtest time range (9:20 AM to 11:20 AM)
-    const backtestCandles = allCandles.filter(candle => 
+    // Filter candles for signal detection (9:20 AM to 11:20 AM)
+    const signalDetectionCandles = allCandles.filter(candle => 
       this.isWithinBacktestTimeRange(candle.timestamp)
     );
 
-    console.log(`Analyzing ${backtestCandles.length} candles from 9:20 AM to 11:20 AM`);
+    console.log(`Signal detection from ${signalDetectionCandles.length} candles (9:20 AM to 11:20 AM)`);
+    console.log(`Total candles available for outcome checking: ${allCandles.length} (until market close)`);
 
     const signals = [];
 
-    // Check each pair of consecutive candles
-    for (let i = 0; i < backtestCandles.length - 1; i++) {
-      const candle1 = backtestCandles[i];
-      const candle2 = backtestCandles[i + 1];
+    // Check each pair of consecutive candles for signals (only in 9:20-11:20 range)
+    // Stop after finding the first signal (1 signal per stock per day maximum)
+    for (let i = 0; i < signalDetectionCandles.length - 1; i++) {
+      const candle1 = signalDetectionCandles[i];
+      const candle2 = signalDetectionCandles[i + 1];
       
       const signal = this.checkTradingSignals(candle1, candle2, pivotPoints);
       
       if (signal.detected) {
         const nextCandleTime = this.getNextCandleTime(candle2.timestamp);
-        console.log(`${signal.signalType} Detected at ${nextCandleTime}`);
+        console.log(`${signal.signalType} Detected at ${nextCandleTime} - First signal for this stock today`);
+        
+        // Find the next candle in ALL candles (for price at detection)
+        let priceAtDetection = null;
+        let nextCandleIndexInAllCandles = -1;
+        
+        // Find the index of candle2 in the full allCandles array
+        const candle2IndexInAll = allCandles.findIndex(c => 
+          c.timestamp === candle2.timestamp && 
+          c.open === candle2.open && 
+          c.close === candle2.close
+        );
+        
+        if (candle2IndexInAll >= 0 && candle2IndexInAll + 1 < allCandles.length) {
+          nextCandleIndexInAllCandles = candle2IndexInAll + 1;
+          priceAtDetection = allCandles[nextCandleIndexInAllCandles].open;
+        }
+        
+        // Calculate stop loss and target
+        const { stopLoss, target } = this.calculateStopLossAndTarget(signal, priceAtDetection);
+        
+        // Check if target or stop loss is hit from detection time to 3:00 PM using ALL candles
+        const tradeReturn = this.checkTradeOutcome(
+          signal.signalType, 
+          priceAtDetection, 
+          stopLoss, 
+          target, 
+          allCandles, // Use ALL candles for outcome checking
+          nextCandleIndexInAllCandles >= 0 ? nextCandleIndexInAllCandles : candle2IndexInAll + 1
+        );
         
         const signalData = {
           signalType: signal.signalType,
           detectionTime: nextCandleTime,
-          pivotType: signal.pivotType,
-          pivotValue: signal.pivot,
-          candle1: signal.candle1,
-          candle2: signal.candle2
+          priceAtDetection: priceAtDetection,
+          stopLoss: stopLoss,
+          target: target,
+          return: tradeReturn
         };
         
         signals.push(signalData);
+        
+        // Break after finding the first signal - only 1 signal per stock per day
+        console.log(`Stopping signal detection for this stock after finding first signal`);
+        break;
       }
     }
 
@@ -365,12 +611,8 @@ class StockDataService {
     const shortSignals = signals.filter(signal => signal.signalType === 'SHORT');
 
     return {
-      invKey,
       symbol: this.getSymbolFromInvKey(invKey),
       backtestDate: currentDate,
-      signalsDetected: signals.length,
-      longSignalsDetected: longSignals.length,
-      shortSignalsDetected: shortSignals.length,
       signals
     };
   }
@@ -415,7 +657,7 @@ class StockDataService {
       batchResults.forEach(result => {
         if (result.success) {
           // Only include results that have signals detected
-          if (result.data.signalsDetected > 0) {
+          if (result.data.signals && result.data.signals.length > 0) {
             results.push(result.data);
           }
         } else {
@@ -486,7 +728,7 @@ class StockDataService {
       batchResults.forEach(result => {
         if (result.success) {
           // Only include results that have signals detected
-          if (result.data.signalsDetected > 0) {
+          if (result.data.signals && result.data.signals.length > 0) {
             results.push(result.data);
           }
         } else {
@@ -548,50 +790,74 @@ class StockDataService {
       timestamp: this.convertToISTTime(candle[0])
     }));
 
-    // Filter candles for backtest time range (9:20 AM to 11:20 AM) to ensure we're in trading hours
-    const tradingCandles = allCandles.filter(candle => 
+    // Filter candles for signal detection (9:20 AM to 11:20 AM) to ensure we're in trading hours
+    const signalDetectionCandles = allCandles.filter(candle => 
       this.isWithinBacktestTimeRange(candle.timestamp)
     );
 
-    // Get only the last 2 candles for current search
-    if (tradingCandles.length < 2) {
+    // Get only the last 2 candles for current search from signal detection range
+    if (signalDetectionCandles.length < 2) {
       return {
-        invKey,
         symbol: this.getSymbolFromInvKey(invKey),
-        searchDate: currentDate,
-        signalsDetected: 0,
-        longSignalsDetected: 0,
-        shortSignalsDetected: 0,
-        signals: [],
-        message: "Insufficient candles for analysis (need at least 2)"
+        backtestDate: currentDate,
+        signals: []
       };
     }
 
-    const lastTwoCandles = tradingCandles.slice(-2);
+    const lastTwoCandles = signalDetectionCandles.slice(-2);
     const candle1 = lastTwoCandles[0]; // candle[-2]
     const candle2 = lastTwoCandles[1]; // candle[-1]
 
     console.log(`Analyzing last 2 candles for ${this.getSymbolFromInvKey(invKey)}: ${candle1.timestamp} and ${candle2.timestamp}`);
+    console.log(`Total candles available for outcome checking: ${allCandles.length} (until current time)`);
 
     const signals = [];
 
     // Check the last two candles for trading signals
+    // For current search, we only check the most recent 2 candles (1 signal per stock per day maximum)
     const signal = this.checkTradingSignals(candle1, candle2, pivotPoints);
     
     if (signal.detected) {
       const nextCandleTime = this.getNextCandleTime(candle2.timestamp);
-      console.log(`${signal.signalType} Detected for ${this.getSymbolFromInvKey(invKey)} at ${nextCandleTime}`);
+      console.log(`${signal.signalType} Detected for ${this.getSymbolFromInvKey(invKey)} at ${nextCandleTime} - First signal for this stock today`);
+      
+      // For current search, we might not have the next candle yet
+      // So we'll use the close price of candle2 as the best available price
+      const priceAtDetection = candle2.close;
+      
+      // Calculate stop loss and target
+      const { stopLoss, target } = this.calculateStopLossAndTarget(signal, priceAtDetection);
+      
+      // Find the index of candle2 in the full allCandles array for outcome checking
+      const candle2IndexInAll = allCandles.findIndex(c => 
+        c.timestamp === candle2.timestamp && 
+        c.open === candle2.open && 
+        c.close === candle2.close
+      );
+      
+      // For current search, check outcome from available candles after detection using ALL candles
+      const tradeReturn = this.checkTradeOutcome(
+        signal.signalType, 
+        priceAtDetection, 
+        stopLoss, 
+        target, 
+        allCandles, // Use ALL candles for outcome checking
+        candle2IndexInAll >= 0 ? candle2IndexInAll + 1 : allCandles.length - 1
+      );
       
       const signalData = {
         signalType: signal.signalType,
         detectionTime: nextCandleTime,
-        pivotType: signal.pivotType,
-        pivotValue: signal.pivot,
-        candle1: signal.candle1,
-        candle2: signal.candle2
+        priceAtDetection: priceAtDetection,
+        stopLoss: stopLoss,
+        target: target,
+        return: tradeReturn
       };
       
       signals.push(signalData);
+      console.log(`Signal added for ${this.getSymbolFromInvKey(invKey)} - Only 1 signal per stock per day`);
+    } else {
+      console.log(`No signal detected for ${this.getSymbolFromInvKey(invKey)} in the last 2 candles`);
     }
 
     // Count signals by type
@@ -599,13 +865,93 @@ class StockDataService {
     const shortSignals = signals.filter(signal => signal.signalType === 'SHORT');
 
     return {
-      invKey,
       symbol: this.getSymbolFromInvKey(invKey),
-      searchDate: currentDate,
-      signalsDetected: signals.length,
-      longSignalsDetected: longSignals.length,
-      shortSignalsDetected: shortSignals.length,
+      backtestDate: currentDate,
       signals
+    };
+  }
+
+  async testStrategyForInstruments(invKeys, previousDate, currentDate) {
+    console.log(`Starting strategy test for ${invKeys.length} instruments on ${currentDate} using pivot from ${previousDate}`);
+    
+    const results = [];
+    const errors = [];
+    
+    console.log(`Processing ${invKeys.length} instruments for strategy test`);
+
+    // Process all instruments with limited concurrency to avoid overwhelming the API
+    const batchSize = 5; // Process 5 instruments at a time
+    for (let i = 0; i < invKeys.length; i += batchSize) {
+      const batch = invKeys.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async (invKey) => {
+        try {
+          const result = await this.runBacktest(invKey, previousDate, currentDate);
+          return { success: true, data: result };
+        } catch (error) {
+          console.error(`Failed to process ${this.getSymbolFromInvKey(invKey)} (${invKey}):`, error.message);
+          return {
+            success: false,
+            invKey,
+            symbol: this.getSymbolFromInvKey(invKey),
+            error: error.message
+          };
+        }
+      });
+
+      const batchResults = await Promise.all(batchPromises);
+      
+      // Separate successful results from errors, only include results with signals
+      batchResults.forEach(result => {
+        if (result.success) {
+          // Only include results that have signals detected
+          if (result.data.signals && result.data.signals.length > 0) {
+            results.push(result.data);
+          }
+        } else {
+          errors.push({
+            invKey: result.invKey,
+            symbol: result.symbol,
+            error: result.error
+          });
+        }
+      });
+
+      // Small delay between batches to be respectful to the API
+      if (i + batchSize < invKeys.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    console.log(`Strategy test completed. Processed: ${results.length}, Failed: ${errors.length}`);
+
+    // Calculate summary statistics
+    const totalSignals = results.reduce((sum, result) => sum + result.signals.length, 0);
+    const totalLongSignals = results.reduce((sum, result) => 
+      sum + result.signals.filter(signal => signal.signalType === 'LONG').length, 0);
+    const totalShortSignals = results.reduce((sum, result) => 
+      sum + result.signals.filter(signal => signal.signalType === 'SHORT').length, 0);
+    
+    // Calculate total return by summing all signal returns
+    const totalReturn = results.reduce((sum, result) => 
+      sum + result.signals.reduce((signalSum, signal) => signalSum + signal.return, 0), 0);
+    
+    // Calculate processed instruments (successful + failed)
+    const processedInstruments = invKeys.length - errors.length;
+
+    // Return results with summary
+    return {
+      totalInstruments: invKeys.length,
+      processedInstruments: processedInstruments,
+      failedInstruments: errors.length,
+      symbolsWithSignals: results.length, // results array now only contains symbols with signals
+      totalSignalsDetected: totalSignals,
+      totalLongSignals: totalLongSignals,
+      totalShortSignals: totalShortSignals,
+      totalReturn: totalReturn,
+      testDate: currentDate,
+      results,
+      errors: errors.length > 0 ? errors : undefined
     };
   }
 }
