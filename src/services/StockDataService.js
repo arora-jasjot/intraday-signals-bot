@@ -69,18 +69,67 @@ class StockDataService {
     return await this.fetchApiData(pivotUrl);
   }
 
+  isHoliday(dateStr) {
+    const holidays = [
+      "26-02-2025",
+      "14-03-2025", 
+      "31-03-2025",
+      "10-04-2025",
+      "14-04-2025",
+      "18-04-2025",
+      "01-05-2025",
+      "15-08-2025",
+      "27-08-2025",
+    ];
+    return holidays.includes(dateStr);
+  }
+
+  getPreviousValidTradingDay(date) {
+    let previousDay = new Date(date);
+    let attempts = 0;
+    const maxAttempts = 10; // Prevent infinite loop
+    
+    while (attempts < maxAttempts) {
+      previousDay.setUTCDate(previousDay.getUTCDate() - 1);
+      const dayOfWeek = previousDay.getUTCDay();
+      
+      // Skip weekends (Saturday = 6, Sunday = 0)
+      if (dayOfWeek === 0 || dayOfWeek === 6) {
+        attempts++;
+        continue;
+      }
+      
+      // Format date as DD-MM-YYYY for holiday check
+      const day = String(previousDay.getUTCDate()).padStart(2, '0');
+      const month = String(previousDay.getUTCMonth() + 1).padStart(2, '0');
+      const year = previousDay.getUTCFullYear();
+      const dateStr = `${day}-${month}-${year}`;
+      
+      // If not a holiday, this is our valid trading day
+      if (!this.isHoliday(dateStr)) {
+        return previousDay;
+      }
+      
+      attempts++;
+    }
+    
+    throw new Error('Could not find a valid previous trading day');
+  }
+
+  getISTDate(date = new Date()) {
+    const istFormatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return istFormatter.format(date);
+  }
+
   async getCurrentDayData(currentDate, instrumentKey) {
 
     // Check if current date is today (using IST timezone)
-    const now = new Date();
-const istFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Kolkata",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
-const istToday = istFormatter.format(now); 
+    const istToday = this.getISTDate();
     console.log(`Current date: ${currentDate}, IST Today: ${istToday}`);
     const isToday = currentDate === istToday;
     
@@ -963,6 +1012,106 @@ const istToday = istFormatter.format(now);
       results,
       errors: errors.length > 0 ? errors : undefined
     };
+  }
+
+  async testStrategyForDateRange(invKeys, startDateStr, endDateStr) {
+    console.log(`Starting strategy test for date range: ${startDateStr} to ${endDateStr}`);
+    
+    const allResults = [];
+    const allErrors = [];
+    let totalReturn = 0;
+    let totalSignals = 0;
+    let totalLongSignals = 0;
+    let totalShortSignals = 0;
+    
+    const dateRange = this.generateDateRange(startDateStr, endDateStr);
+    console.log(`Generated ${dateRange.length} valid trading days in range`);
+    
+    for (const currentDate of dateRange) {
+      console.log(`\n=== Processing date: ${currentDate} ===`);
+      
+      try {
+        // Get the previous valid trading day for pivot calculation
+        const currentDateObj = new Date(currentDate + 'T00:00:00.000Z');
+        const previousTradingDay = this.getPreviousValidTradingDay(currentDateObj);
+        const previousDateStr = this.getISTDate(previousTradingDay);
+        
+        console.log(`Using pivot data from: ${previousDateStr}`);
+        
+        const dayResults = await this.testStrategyForInstruments(
+          invKeys,
+          previousDateStr,
+          currentDate
+        );
+        
+        // Aggregate results
+        if (dayResults.results && dayResults.results.length > 0) {
+          allResults.push(...dayResults.results);
+          totalReturn += dayResults.totalReturn || 0;
+          totalSignals += dayResults.totalSignalsDetected || 0;
+          totalLongSignals += dayResults.totalLongSignals || 0;
+          totalShortSignals += dayResults.totalShortSignals || 0;
+        }
+        
+        if (dayResults.errors) {
+          allErrors.push(...dayResults.errors);
+        }
+        
+        console.log(`Date ${currentDate} processed: ${dayResults.totalSignalsDetected || 0} signals, Return: ${dayResults.totalReturn || 0}`);
+        
+      } catch (error) {
+        console.error(`Failed to process date ${currentDate}:`, error.message);
+        allErrors.push({
+          date: currentDate,
+          error: error.message
+        });
+      }
+    }
+    
+    return {
+      totalInstruments: invKeys.length,
+      totalDatesProcessed: dateRange.length,
+      symbolsWithSignals: allResults.length,
+      totalSignalsDetected: totalSignals,
+      totalLongSignals: totalLongSignals,
+      totalShortSignals: totalShortSignals,
+      totalReturn: totalReturn,
+      dateRange: `${startDateStr} to ${endDateStr}`,
+      results: allResults,
+      errors: allErrors.length > 0 ? allErrors : undefined
+    };
+  }
+
+  generateDateRange(startDateStr, endDateStr) {
+    const startDate = new Date(startDateStr + 'T00:00:00.000Z');
+    const endDate = new Date(endDateStr + 'T00:00:00.000Z');
+    const validDates = [];
+    
+    const currentDate = new Date(startDate);
+    
+    while (currentDate <= endDate) {
+      const dayOfWeek = currentDate.getUTCDay();
+      
+      // Skip weekends
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+        // Format date as DD-MM-YYYY for holiday check
+        const day = String(currentDate.getUTCDate()).padStart(2, '0');
+        const month = String(currentDate.getUTCMonth() + 1).padStart(2, '0');
+        const year = currentDate.getUTCFullYear();
+        const dateStr = `${day}-${month}-${year}`;
+        
+        // Skip holidays
+        if (!this.isHoliday(dateStr)) {
+          validDates.push(this.getISTDate(currentDate));
+        } else {
+          console.log(`Skipping holiday: ${dateStr}`);
+        }
+      }
+      
+      currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    }
+    
+    return validDates;
   }
 }
 
