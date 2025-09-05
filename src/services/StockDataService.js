@@ -70,9 +70,19 @@ class StockDataService {
   }
 
   async getCurrentDayData(currentDate, instrumentKey) {
-    // Check if current date is today
-    const today = new Date().toISOString().split('T')[0];
-    const isToday = currentDate === today;
+
+    // Check if current date is today (using IST timezone)
+    const now = new Date();
+const istFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Kolkata",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+const istToday = istFormatter.format(now); 
+    console.log(`Current date: ${currentDate}, IST Today: ${istToday}`);
+    const isToday = currentDate === istToday;
     
     let candlesUrl;
     
