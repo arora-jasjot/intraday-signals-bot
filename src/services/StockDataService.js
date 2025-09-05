@@ -9,6 +9,26 @@ const REQUEST_TIMEOUT = 30000;
 const USER_AGENT = "intraday-bot/1.0.0";
 
 class StockDataService {
+  constructor() {
+    this.RISK_REWARD_RATIO = 2; // 1:2 risk-reward ratio (change this value as needed)
+    this.holidays = [
+      '2025-01-26', // Republic Day
+      '2025-03-08', // Holi
+      '2025-03-29', // Good Friday
+      '2025-04-11', // Eid ul Fitr
+      '2025-04-14', // Ambedkar Jayanti
+      '2025-04-17', // Ram Navami
+      '2025-05-01', // Maharashtra Day
+      '2025-08-15', // Independence Day
+      '2025-10-02', // Gandhi Jayanti
+      '2025-10-12', // Dussehra
+      '2025-10-31', // Diwali
+      '2025-11-01', // Diwali
+      '2025-11-14', // Diwali
+      '2025-12-25'  // Christmas
+    ];
+  }
+
   getSymbolFromInvKey(invKey) {
     // Decode URL encoded inv_key
     const decodedInvKey = decodeURIComponent(invKey);
@@ -298,7 +318,12 @@ class StockDataService {
     }
     
     for (const pivot of allPivots) {
-      // Check if candle1 opens below pivot and closes above pivot
+      // Calculate 0.05% tolerance around pivot
+      const tolerance = pivot * 0.0025; // 0.05% = 0.0005
+      const pivotUpper = pivot + tolerance;
+      const pivotLower = pivot - tolerance;
+      
+      // Check if candle1 opens below pivot (with tolerance) and closes above pivot (with tolerance)
       if (candle1.open < pivot && candle1.close > pivot) {
         // Calculate body portions
         const bodyBelowPivot = pivot - candle1.open;
@@ -306,8 +331,8 @@ class StockDataService {
         
         // Check if body below pivot > body above pivot
         if (bodyBelowPivot > bodyAbovePivot) {
-          // Check candle2 conditions: low above pivot and close > open (bullish)
-          if (candle2.low > pivot && candle2.close > candle2.open) {
+          // Check candle2 conditions: low above pivot (with tolerance) and close > open (bullish)
+          if (candle2.low >= pivotLower && candle2.close > candle2.open) {
             return {
               detected: true,
               signalType: 'LONG',
@@ -335,7 +360,12 @@ class StockDataService {
     }
     
     for (const pivot of allPivots) {
-      // Check if candle1 opens above pivot and closes below pivot
+      // Calculate 0.05% tolerance around pivot
+      const tolerance = pivot * 0.0025; // 0.05% = 0.0005
+      const pivotUpper = pivot + tolerance;
+      const pivotLower = pivot - tolerance;
+      
+      // Check if candle1 opens above pivot (with tolerance) and closes below pivot (with tolerance)
       if (candle1.open > pivot && candle1.close < pivot) {
         // Calculate body portions
         const bodyAbovePivot = candle1.open - pivot;
@@ -343,8 +373,8 @@ class StockDataService {
         
         // Check if body above pivot > body below pivot
         if (bodyAbovePivot > bodyBelowPivot) {
-          // Check candle2 conditions: high below pivot and close < open (bearish)
-          if (candle2.high < pivot && candle2.close < candle2.open) {
+          // Check candle2 conditions: high below pivot (with tolerance) and close < open (bearish)
+          if (candle2.high <= pivotUpper && candle2.close < candle2.open) {
             return {
               detected: true,
               signalType: 'SHORT',
@@ -414,11 +444,11 @@ class StockDataService {
       // Use the higher value (less restrictive) between calculated and max stop loss
       stopLoss = Math.max(calculatedStopLoss, maxStopLoss);
       
-      // Calculate target: 1:2 risk-reward ratio
-      // Risk = detection price - stop loss
-      // Target = detection price + (2 * risk)
-      const risk = priceAtDetection - stopLoss;
-      target = priceAtDetection + (2 * risk);
+             // Calculate target: 1:2 risk-reward ratio
+       // Risk = detection price - stop loss
+       // Target = detection price + (RISK_REWARD_RATIO * risk)
+       const risk = priceAtDetection - stopLoss;
+       target = priceAtDetection + (this.RISK_REWARD_RATIO * risk);
       
     } else if (signal.signalType === 'SHORT') {
       // For SHORT trades:
@@ -437,11 +467,11 @@ class StockDataService {
       // Use the lower value (less restrictive) between calculated and max stop loss
       stopLoss = Math.min(calculatedStopLoss, maxStopLoss);
       
-      // Calculate target: 1:2 risk-reward ratio
-      // Risk = stop loss - detection price
-      // Target = detection price - (2 * risk)
-      const risk = stopLoss - priceAtDetection;
-      target = priceAtDetection - (2 * risk);
+             // Calculate target: 1:2 risk-reward ratio
+       // Risk = stop loss - detection price
+       // Target = detection price - (RISK_REWARD_RATIO * risk)
+       const risk = stopLoss - priceAtDetection;
+       target = priceAtDetection - (this.RISK_REWARD_RATIO * risk);
     }
 
     return {
@@ -531,11 +561,11 @@ class StockDataService {
           console.log(`       Candle Low (${candle.low}) <= Stop Loss (${stopLoss})`);
           return -1; // Stop loss hit
         }
-        if (candle.high >= target) {
-          console.log(`    ✅ LONG TARGET HIT at ${candle.timestamp}`);
-          console.log(`       Candle High (${candle.high}) >= Target (${target})`);
-          return 2; // Target hit
-        }
+                 if (candle.high >= target) {
+           console.log(`    ✅ LONG TARGET HIT at ${candle.timestamp}`);
+           console.log(`       Candle High (${candle.high}) >= Target (${target})`);
+           return this.RISK_REWARD_RATIO; // Target hit
+         }
         console.log(`    ⏳ Continue checking...`);
         
       } else if (signalType === 'SHORT') {
@@ -549,11 +579,11 @@ class StockDataService {
           console.log(`       Candle High (${candle.high}) >= Stop Loss (${stopLoss})`);
           return -1; // Stop loss hit
         }
-        if (candle.low <= target) {
-          console.log(`    ✅ SHORT TARGET HIT at ${candle.timestamp}`);
-          console.log(`       Candle Low (${candle.low}) <= Target (${target})`);
-          return 2; // Target hit
-        }
+                 if (candle.low <= target) {
+           console.log(`    ✅ SHORT TARGET HIT at ${candle.timestamp}`);
+           console.log(`       Candle Low (${candle.low}) <= Target (${target})`);
+           return this.RISK_REWARD_RATIO; // Target hit
+         }
         console.log(`    ⏳ Continue checking...`);
       }
       console.log(``);
